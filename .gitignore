@@ -1,0 +1,8 @@
+# Something Framework - Git Ignore
+config/something.conf
+something.pid
+logs/
+*.log
+scratch/
+.code-review-graph/
+.DS_Store

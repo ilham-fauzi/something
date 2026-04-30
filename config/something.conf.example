@@ -1,0 +1,16 @@
+# 'Something' Framework Configuration
+
+# Telegram Bot Token
+TOKEN=""
+
+# Telegram Chat ID for notifications
+CHAT_ID=""
+
+# Check interval in seconds
+CHECK_INTERVAL=60
+
+# Log file path
+LOG_FILE="./logs/something.log"
+
+# Enabled Modules (comma separated)
+ENABLED_MODULES="system,pm2,redis"

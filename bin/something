@@ -1,0 +1,324 @@
+#!/bin/bash
+
+# 'Something' CLI Wrapper
+# Usage: something [start|stop|restart|status|logs]
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PID_FILE="$DIR/something.pid"
+ENGINE="$DIR/lib/engine.sh"
+
+start() {
+    if [ -f "$PID_FILE" ]; then
+        echo "Something is already running (PID: $(cat "$PID_FILE"))"
+        return
+    fi
+    echo "Starting Something framework..."
+    nohup bash "$ENGINE" > /dev/null 2>&1 &
+    echo $! > "$PID_FILE"
+    echo "Started (PID: $(cat "$PID_FILE"))"
+}
+
+stop() {
+    if [ ! -f "$PID_FILE" ]; then
+        echo "Something is not running."
+        return
+    fi
+    local pid=$(cat "$PID_FILE")
+    echo "Stopping Something (PID: $pid)..."
+    kill "$pid"
+    rm "$PID_FILE"
+    echo "Stopped."
+}
+
+status() {
+    if [ -f "$PID_FILE" ]; then
+        local pid=$(cat "$PID_FILE")
+        if ps -p "$pid" > /dev/null; then
+            echo "Something is running (PID: $pid)"
+            uptime_sec=$(( $(date +%s) - $(stat -c %Y "$PID_FILE") ))
+            echo "Uptime: $((uptime_sec / 60)) minutes"
+        else
+            echo "Something is crashed or not running (stale PID file)."
+            rm "$PID_FILE"
+        fi
+    else
+        echo "Something is not running."
+    fi
+}
+
+create_module() {
+    local module_name=$1
+    if [ -z "$module_name" ]; then
+        echo "Error: Module name is required."
+        echo "Usage: something create -m <module_name>"
+        return 1
+    fi
+
+    # Sanitize module name for filename
+    local filename=$(echo "$module_name" | tr '[:upper:]' '[:lower:]' | tr ' ' '_')
+    local target="$DIR/modules/$filename.sh"
+
+    if [ -f "$target" ]; then
+        echo "Error: Module '$filename' already exists at $target"
+        return 1
+    fi
+
+    echo "Generating template for module: $module_name..."
+    
+    cat <<EOF > "$target"
+#!/bin/bash
+
+# Module: $module_name
+# Description: Custom monitoring module
+
+module_name="⚡️ $module_name"
+module_commands=("/$(echo "$filename" | tr '_' '/')")
+
+# Configuration (Defaults)
+# SAMPLE_VAR="\${SAMPLE_VAR:-default_value}"
+
+# Metadata for interactive setup
+module_vars=(
+    # "SAMPLE_VAR:Description:default_value"
+)
+
+# Module Dependencies
+# Format: ("cmd:package_name" or "cmd")
+module_dependencies=()
+
+module_setup() {
+    # Custom setup logic (runs on 'something setup')
+    echo "Setting up \$module_name..."
+    return 0
+}
+
+module_check() {
+    # Health check logic
+    # Return 0 for OK, 1 for Alert
+    # echo "Alert message" if returning 1
+    return 0
+}
+
+module_handle_command() {
+    local cmd=\$1
+    case "\$cmd" in
+        "/$(echo "$filename" | tr '_' '/')")
+            echo "<b>\$module_name</b> is active."
+            ;;
+    esac
+}
+EOF
+
+
+    chmod +x "$target"
+    echo "Module created: $target"
+    echo ""
+    echo "To enable and setup this module:"
+    echo "1. Open $DIR/config/something.conf"
+    echo "2. Add '$filename' to ENABLED_MODULES"
+    echo "3. Run setup: something setup"
+    echo "4. Restart: something restart"
+}
+
+
+
+update_conf_val() {
+    local key=$1
+    local val=$2
+    local conf_file="$DIR/config/something.conf"
+    
+    # Ensure config file exists
+    touch "$conf_file"
+
+    if grep -q "^[[:space:]]*$key=" "$conf_file"; then
+        # Key exists, update it
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            sed -i '' "s|^[[:space:]]*$key=.*|$key=\"$val\"|" "$conf_file"
+        else
+            sed -i "s|^[[:space:]]*$key=.*|$key=\"$val\"|" "$conf_file"
+        fi
+    else
+        # Key doesn't exist, append it
+        # Add a newline if the file doesn't end with one
+        if [ -s "$conf_file" ] && [ -n "$(tail -c1 "$conf_file" 2>/dev/null)" ]; then
+            echo "" >> "$conf_file"
+        fi
+        echo "$key=\"$val\"" >> "$conf_file"
+    fi
+    
+    # Update current shell variable
+    printf -v "$key" "%s" "$val"
+}
+
+
+
+sequential_telegram_config() {
+    # Refresh config
+    source "$DIR/config/something.conf"
+    echo ""
+    echo "⚙️  Telegram Configuration"
+    echo "-------------------------"
+    
+    # 1. Bot Token
+    local current_token="$TOKEN"
+    local display_token="${current_token:0:10}..."
+    [ -z "$current_token" ] && display_token="None"
+    
+    read -p "Bot Token [$display_token]: " new_token
+    new_token=$(echo "$new_token" | xargs) # Trim whitespace
+    if [ -n "$new_token" ]; then
+        update_conf_val "TOKEN" "$new_token"
+        echo "✅ Bot Token updated."
+    fi
+
+    # 2. Chat ID
+    local current_id="$CHAT_ID"
+    [ -z "$current_id" ] && current_id="None"
+    
+    read -p "Chat ID [$current_id] (Type 'auto' to detect): " new_id
+    new_id=$(echo "$new_id" | xargs) # Trim whitespace
+    if [ -n "$new_id" ]; then
+        if [ "$new_id" == "auto" ]; then
+            echo "🔍 Attempting to auto-detect Chat ID..."
+            echo "👉 STEP 1: Open your Telegram app."
+            echo "👉 STEP 2: Search for bot @v60pro_bot (or your current bot name)."
+            echo "👉 STEP 3: Send the command /start to the bot."
+            
+            while true; do
+                read -p "Press ENTER once command is sent (or type 'skip'): " choice
+                [ "$choice" == "skip" ] && break
+                
+                # Use the most recent token from shell
+                local active_token="$TOKEN"
+                echo "📡 Fetching updates from Telegram..."
+                local update=$(curl -s "https://api.telegram.org/bot$active_token/getUpdates?limit=5&offset=-1")
+                
+                # Robust extraction: look for any chat ID in the result
+                local found_id=$(echo "$update" | jq -r '
+                    .result | reverse | .[] | 
+                    ( .message.chat.id // .my_chat_member.chat.id // .callback_query.message.chat.id // .channel_post.chat.id )
+                ' 2>/dev/null | head -n 1)
+                
+                if [ "$found_id" != "null" ] && [ -n "$found_id" ]; then
+                    echo "✅ Found Chat ID: $found_id"
+                    update_conf_val "CHAT_ID" "$found_id"
+                    break
+                else
+                    echo "❌ Could not find any new messages/commands."
+                    echo "💡 Tip: Make sure you sent /start to @v60pro_bot."
+                    echo "------------------------------------------------"
+                fi
+            done
+        else
+            update_conf_val "CHAT_ID" "$new_id"
+            echo "✅ Chat ID updated."
+        fi
+    fi
+}
+
+
+setup_modules() {
+    echo "🔍 Scanning enabled modules for dependencies..."
+    source "$DIR/config/something.conf"
+    source "$DIR/lib/utils.sh"
+    
+    echo ""
+    # Check core dependencies
+    install_dependencies "curl" "jq"
+
+    # Mandatory sequential config
+    sequential_telegram_config
+
+    echo ""
+    echo "⚙️  Core Configuration"
+    local core_vars=(
+        "CHECK_INTERVAL:Check interval in seconds:60"
+        "LOG_FILE:Log file path:$DIR/logs/something.log"
+    )
+    for var_entry in "${core_vars[@]}"; do
+        local key=$(echo "$var_entry" | cut -d':' -f1)
+        local desc=$(echo "$var_entry" | cut -d':' -f2)
+        local default=$(echo "$var_entry" | cut -d':' -f3)
+        local current="${!key}"
+        [ -z "$current" ] && current=$default
+        
+        read -p "   $desc [$current]: " new_val
+        if [ -n "$new_val" ]; then
+            update_conf_val "$key" "$new_val"
+            echo "   ✅ $key updated."
+        elif ! grep -q "^[[:space:]]*$key=" "$DIR/config/something.conf"; then
+            update_conf_val "$key" "$current"
+            echo "   ✅ $key initialized."
+        fi
+    done
+    # Process enabled modules
+    IFS=',' read -ra ADDR <<< "$ENABLED_MODULES"
+    for module in "${ADDR[@]}"; do
+        module=$(echo "$module" | xargs) # Trim whitespace
+        [ -z "$module" ] && continue
+        
+        local mod_path="$DIR/modules/$module.sh"
+        if [ -f "$mod_path" ]; then
+            # Clean up previous module definitions
+            unset module_dependencies
+            unset -f module_setup
+            
+            source "$mod_path"
+            echo "📦 Module: $module"
+            
+            # 1. Install defined dependencies
+            if [[ "$(declare -p module_dependencies 2>/dev/null)" == "declare -a"* ]]; then
+                install_dependencies "${module_dependencies[@]}"
+            fi
+            
+            # 2. Run custom setup if exists
+            if declare -f module_setup > /dev/null; then
+                module_setup
+            fi
+
+            # 3. Handle configurable module variables
+            if [[ "$(declare -p module_vars 2>/dev/null)" == "declare -a"* ]]; then
+                echo "⚙️  Configuring variables for $module..."
+                for var_entry in "${module_vars[@]}"; do
+                    # Format: KEY:Description:Default
+                    local key=$(echo "$var_entry" | cut -d':' -f1)
+                    local desc=$(echo "$var_entry" | cut -d':' -f2)
+                    local default=$(echo "$var_entry" | cut -d':' -f3)
+                    
+                    # Get current value from config or default
+                    local current="${!key}"
+                    [ -z "$current" ] && current=$default
+                    
+                    read -p "   $desc [$current]: " new_val
+                    if [ -n "$new_val" ]; then
+                        update_conf_val "$key" "$new_val"
+                        echo "   ✅ $key updated in config."
+                    elif ! grep -q "^[[:space:]]*$key=" "$DIR/config/something.conf"; then
+                        # If key doesn't exist in config at all, save the current/default value
+                        update_conf_val "$key" "$current"
+                        echo "   ✅ $key initialized in config."
+                    fi
+
+                done
+            fi
+        fi
+    done
+    echo "✅ Setup completed."
+}
+
+case "$1" in
+    start) start ;;
+    stop) stop ;;
+    restart) stop; sleep 1; start ;;
+    status) status ;;
+    logs) tail -f "$DIR/logs/something.log" ;;
+    setup) setup_modules ;;
+    create)
+        if [ "$2" == "-m" ]; then
+            create_module "$3"
+        else
+            echo "Usage: something create -m <module_name>"
+        fi
+        ;;
+    *) echo "Usage: something {start|stop|restart|status|logs|create|setup}" ;;
+esac

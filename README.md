@@ -109,7 +109,7 @@ Available monitoring modules:
 - **System**: CPU, Memory, Disk, and Load average.
 - **PM2**: Monitor Node.js processes managed by PM2.
 - **Redis**: Health, memory usage, and client connections.
-- **Kafka**: [New] Monitor topics, consumer groups, lag, and latency.
+- **Kafka**: Advanced monitoring for topics, consumer groups, lag, members, and message latency. Supports auto-remediation.
 
 ### 🛠 Remediation (Self-Healing)
 
@@ -120,16 +120,77 @@ The framework now supports safety-first automatic remediation. If a check fails,
 
 This is configurable via `${MODULE}_AUTO_FIX="true"` and `${MODULE}_APP_MANAGER`.
 
-### 📊 Kafka Module Commands
+### 🖥 System Module
+Lightweight system resource monitoring.
 
-- `/kafka_status` - General health and metadata.
-- `/kafka_lag` - Detailed lag per partition.
-- `/kafka_members` - Active consumer group members.
-- `/kafka_reload` - Safe reload of the consumer app.
-- `/kafka_restart` - Force restart of the consumer app.
+#### Features:
+- 🧠 **RAM**: Monitoring usage % against thresholds.
+- 💾 **Disk**: Monitoring root partition usage.
+- 📈 **Load**: Real-time CPU load average tracking.
+
+#### Commands:
+| Command | Description |
+| :--- | :--- |
+| `/system` | Quick overview of CPU, RAM, Disk, and Uptime. |
+| `/top` | List top 5 processes by CPU usage. |
+
+---
+
+### 🚀 PM2 Module
+Deep integration for Node.js applications managed by PM2.
+
+#### Features:
+- 🚦 **Process Status**: Monitor if your app is `online`, `stopped`, or `errored`.
+- 🌐 **HTTP Health**: Optional URL check to verify web server response.
+- 🚑 **Auto-Restart**: Automatically triggers `pm2 restart` on failure.
+
+#### Commands:
+| Command | Description |
+| :--- | :--- |
+| `/status` | View status, CPU, Memory, and Uptime of the app. |
+| `/logs` | Tail the last 10 lines of the application logs. |
+| `/restart` | Manually restart the application via Telegram. |
+
+---
+
+### ⚡️ Redis Module
+Reliability monitoring for your Redis data store.
+
+#### Features:
+- 🏓 **Latency**: Measures response time via PING/PONG.
+- 👥 **Clients**: Tracks number of connected clients.
+- 🧠 **Memory**: Monitors `used_memory_human` for memory pressure.
+
+#### Commands:
+| Command | Description |
+| :--- | :--- |
+| `/redis_status` | Comprehensive overview (Version, Clients, Memory, Uptime). |
+| `/redis_ping` | Test connectivity and latency. |
+
+---
+
+### 📊 Kafka Module
+The Kafka module is designed for production reliability, offering both deep monitoring and automated recovery.
+
+#### Features:
+- 📡 **Connectivity**: Real-time broker availability checks.
+- 📉 **Lag Tracking**: Sum of lag across all partitions with configurable thresholds.
+- 👥 **Member Audit**: Active monitoring of consumer group member counts (alerts if consumer dies).
+- ⏱ **Latency Analysis**: Monitors the age of the latest message to detect "stuck" producers or consumers.
+- 🚑 **Auto-Healing**: Automatically triggers app reload/restart if lag or member loss is detected.
+
+#### Commands:
+| Command | Description |
+| :--- | :--- |
+| `/kafka_status` | General health, group state, and member count. |
+| `/kafka_lag` | Detailed lag breakdown per partition. |
+| `/kafka_members` | List active consumer members with Client ID and Host. |
+| `/kafka_reload` | Safe reload of the consumer application. |
+| `/kafka_restart` | Force restart of the consumer application. |
+| `/kafka_start` / `/kafka_stop` | Manual process control via Telegram. |
 
 > [!TIP]
-> You can limit which Kafka checks are performed by setting `KAFKA_CHECKS="lag,members"` in your config. This is useful for reducing noise or focusing on specific metrics. Available options: `lag`, `members`, `latency`, `connectivity`.
+> You can fine-tune which checks are performed by setting `KAFKA_CHECKS="lag,members,latency"` in your config. Available options: `lag`, `members`, `latency`, `connectivity`.
 
 ---
 

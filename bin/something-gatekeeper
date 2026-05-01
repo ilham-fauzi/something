@@ -3,7 +3,14 @@
 # 'Something' Telegram Gatekeeper
 # Listens for Master Key on boot to unlock the system
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Get the real directory of the script, resolving symlinks
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+    DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+DIR="$( cd -P "$( dirname "$SOURCE" )/.." >/dev/null 2>&1 && pwd )"
 BOOT_CONF="$DIR/config/boot.conf"
 LOG_FILE="$DIR/logs/gatekeeper.log"
 

@@ -44,12 +44,28 @@ When the server starts, a background process called **Gatekeeper** activates.
 
 ## 📥 Installation
 
+Choose your preferred installation method:
+
+### 1. One-Liner (Recommended for Linux/macOS)
+The fastest way to get started. This will clone the framework to `~/.something` and link the `something` command globally.
+```bash
+curl -sSL https://raw.githubusercontent.com/ilham-fauzi/something/main/scripts/install-global.sh | bash
+```
+
+### 2. Homebrew (macOS & Linux)
+If you use Homebrew, you can install it via our Tap:
+```bash
+brew tap ilham-fauzi/something
+brew install something
+```
+
+### 3. Manual (Git Clone)
+If you prefer to manage the repository manually:
 1.  **Clone the Repo**:
     ```bash
-    git clone <repository-url> something
+    git clone https://github.com/ilham-fauzi/something.git
     cd something
     ```
-
 2.  **Run Installer**:
     ```bash
     ./install.sh
@@ -83,6 +99,37 @@ The `something` CLI is your control center.
 | :--- | :--- |
 | `something create -m <name>` | Generate a boilerplate directory for a new monitoring module. |
 | `something module` | Install, remove, list, or update external modules. |
+
+---
+
+### 📦 Modules
+
+Available monitoring modules:
+
+- **System**: CPU, Memory, Disk, and Load average.
+- **PM2**: Monitor Node.js processes managed by PM2.
+- **Redis**: Health, memory usage, and client connections.
+- **Kafka**: [New] Monitor topics, consumer groups, lag, and latency.
+
+### 🛠 Remediation (Self-Healing)
+
+The framework now supports safety-first automatic remediation. If a check fails, the framework can automatically attempt to fix the service using:
+- **PM2**: `reload` (zero-downtime) or `restart`.
+- **Systemd**: `reload` or `restart`.
+- **Docker**: `HUP` signal or `restart`.
+
+This is configurable via `${MODULE}_AUTO_FIX="true"` and `${MODULE}_APP_MANAGER`.
+
+### 📊 Kafka Module Commands
+
+- `/kafka_status` - General health and metadata.
+- `/kafka_lag` - Detailed lag per partition.
+- `/kafka_members` - Active consumer group members.
+- `/kafka_reload` - Safe reload of the consumer app.
+- `/kafka_restart` - Force restart of the consumer app.
+
+> [!TIP]
+> You can limit which Kafka checks are performed by setting `KAFKA_CHECKS="lag,members"` in your config. This is useful for reducing noise or focusing on specific metrics. Available options: `lag`, `members`, `latency`, `connectivity`.
 
 ---
 

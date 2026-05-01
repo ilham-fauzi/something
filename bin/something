@@ -3,7 +3,14 @@
 # 'Something' CLI Wrapper
 # Usage: something [start|stop|restart|status|logs]
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Get the real directory of the script, resolving symlinks
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+    DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+DIR="$( cd -P "$( dirname "$SOURCE" )/.." >/dev/null 2>&1 && pwd )"
 PID_FILE="$DIR/something.pid"
 ENGINE="$DIR/lib/engine.sh"
 LOG_FILE="$DIR/logs/something.log"

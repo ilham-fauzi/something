@@ -141,10 +141,24 @@ run_health_checks() {
 
         if [ $? -ne 0 ] && [ -n "$alert" ]; then
             log_warn "Health check failed in $module: $alert"
-            send_message "⚠️ <b>Alert from $module</b>: $alert"
+            
+            # Check for auto-remediation
+            local auto_fix_var=$(echo "${module}_AUTO_FIX" | tr '[:lower:]' '[:upper:]')
+            if [[ "${!auto_fix_var}" == "true" ]] && declare -f "${module}_remediate" > /dev/null; then
+                send_message "⚠️ <b>Alert from $module</b>: $alert\n\n🛠 <b>Auto-Remediation</b>: Attempting safe reload..."
+                local fix_result=$("${module}_remediate" "reload")
+                if [ $? -eq 0 ]; then
+                    send_message "✅ <b>Auto-Remediation Success</b> ($module): System restored."
+                else
+                    send_message "❌ <b>Auto-Remediation Failed</b> ($module): $fix_result"
+                fi
+            else
+                send_message "⚠️ <b>Alert from $module</b>: $alert"
+            fi
         fi
     done
 }
+
 
 # Main Loop
 main() {

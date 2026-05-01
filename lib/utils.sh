@@ -197,3 +197,63 @@ resolve_module_url() {
     esac
     return 0
 }
+
+# Generic application management (PM2, Systemd, Docker)
+# Usage: app_manage_action <action> <app_name> <manager>
+# Actions: reload, restart, stop, start
+app_manage_action() {
+    local action=$1
+    local app_name=$2
+    local manager=$3
+    local result=""
+
+    log_info "Executing $action on $app_name via $manager"
+
+    case "$manager" in
+        "pm2")
+            if ! command -v pm2 >/dev/null 2>&1; then
+                echo "Error: pm2 not found"
+                return 1
+            fi
+            case "$action" in
+                "reload")  result=$(pm2 reload "$app_name" 2>&1) ;;
+                "restart") result=$(pm2 restart "$app_name" 2>&1) ;;
+                "stop")    result=$(pm2 stop "$app_name" 2>&1) ;;
+                "start")   result=$(pm2 start "$app_name" 2>&1) ;;
+            esac
+            ;;
+        "systemd")
+            case "$action" in
+                "reload")  result=$(sudo systemctl reload "$app_name" 2>&1) ;;
+                "restart") result=$(sudo systemctl restart "$app_name" 2>&1) ;;
+                "stop")    result=$(sudo systemctl stop "$app_name" 2>&1) ;;
+                "start")   result=$(sudo systemctl start "$app_name" 2>&1) ;;
+            esac
+            ;;
+        "docker")
+            case "$action" in
+                "reload")  result=$(docker kill -s HUP "$app_name" 2>&1) ;;
+                "restart") result=$(docker restart "$app_name" 2>&1) ;;
+                "stop")    result=$(docker stop "$app_name" 2>&1) ;;
+                "start")   result=$(docker start "$app_name" 2>&1) ;;
+            esac
+            ;;
+        "custom")
+            # For custom, we assume app_name is the full command or path to script
+            result=$(eval "$app_name $action" 2>&1)
+            ;;
+        *)
+            echo "Error: Unknown manager '$manager'"
+            return 1
+            ;;
+    esac
+
+    local status=$?
+    if [ $status -eq 0 ]; then
+        return 0
+    else
+        echo "$result"
+        return $status
+    fi
+}
+

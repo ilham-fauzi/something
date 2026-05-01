@@ -73,3 +73,113 @@ install_dependencies() {
         fi
     done
 }
+# Encryption/Decryption Helpers
+encrypt_file() {
+    local input=$1
+    local output=$2
+    local pass=$3
+    openssl enc -aes-256-cbc -salt -pbkdf2 -in "$input" -out "$output" -pass "pass:$pass" 2>/dev/null
+}
+
+decrypt_file() {
+    local input=$1
+    local pass=$2
+    openssl enc -aes-256-cbc -d -salt -pbkdf2 -in "$input" -pass "pass:$pass" 2>/dev/null
+}
+
+load_config() {
+    local base_dir=${1:-$DIR}
+    local conf_file="$base_dir/config/something.conf"
+    local enc_file="$base_dir/config/something.conf.enc"
+    
+    if [ -f "$conf_file" ]; then
+        # Check permissions
+        local perms=$(stat -c %a "$conf_file" 2>/dev/null || stat -f %Lp "$conf_file" 2>/dev/null)
+        if [ "$perms" != "600" ]; then
+            chmod 600 "$conf_file"
+            log_info "Corrected permissions for something.conf to 600"
+        fi
+        source "$conf_file"
+        log_info "Configuration loaded from plaintext file"
+        return 0
+    elif [ -f "$enc_file" ]; then
+        local master_key="$MASTER_KEY"
+        if [ -z "$master_key" ]; then
+            echo "🔐 Config is LOCKED."
+            read -s -p "🔑 Enter Master Key to continue: " master_key
+            echo ""
+        fi
+        
+        local decrypted_content
+        decrypted_content=$(decrypt_file "$enc_file" "$master_key")
+        local decrypt_status=$?
+        
+        if [ $decrypt_status -ne 0 ] || [ -z "$decrypted_content" ]; then
+            log_error "Failed to load config: Incorrect key or decryption error (Status: $decrypt_status)"
+            echo "❌ Error: Incorrect key or corrupted vault."
+            return 1
+        fi
+        
+        eval "$decrypted_content"
+
+        # Security Verification: Cross-check if unlocked via Gatekeeper
+        # This prevents 'Identity Hijacking' where boot.conf is modified to use a different bot/chat
+        if [ -n "$G_SENDER_ID" ]; then
+            # Determine effective authorized list for Gatekeeper
+            local authorized_list="$GATEKEEPER_IDS"
+            if [ -z "$authorized_list" ] || [ "$authorized_list" == "all" ]; then
+                authorized_list="$CHAT_ID"
+            fi
+
+            # Support multiple Chat IDs (comma separated)
+            if [[ ",$authorized_list," != *",$G_SENDER_ID,"* ]]; then
+                log_error "SECURITY ALERT: Gatekeeper sender ($G_SENDER_ID) NOT in authorized list ($authorized_list). ABORTING."
+                echo "🚨 SECURITY VIOLATION: Unauthorized Gatekeeper sender ID detected."
+                echo "   The system refuses to start because the unlock request came from an untrusted account."
+                exit 1
+            fi
+            log_info "Gatekeeper Sender ID verified against encrypted vault identity ($G_SENDER_ID)."
+        fi
+
+        # Export the key for sub-processes
+        export MASTER_KEY="$master_key"
+        log_info "Configuration loaded from encrypted vault"
+        return 0
+    else
+        log_warn "No configuration file found at $conf_file or $enc_file"
+        return 0
+    fi
+}
+
+update_conf_val() {
+    local key=$1
+    local val=$2
+    local target_file=${3:-"$DIR/config/something.conf"}
+    
+    # Ensure directory exists
+    mkdir -p "$(dirname "$target_file")"
+    touch "$target_file"
+
+    if grep -q "^[[:space:]]*$key=" "$target_file"; then
+        # Key exists, update it
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            sed -i '' "s|^[[:space:]]*$key=.*|$key=\"$val\"|" "$target_file"
+        else
+            sed -i "s|^[[:space:]]*$key=.*|$key=\"$val\"|" "$target_file"
+        fi
+    else
+        # Key doesn't exist, append it
+        if [ -s "$target_file" ] && [ -n "$(tail -c1 "$target_file" 2>/dev/null)" ]; then
+            echo "" >> "$target_file"
+        fi
+        echo "$key=\"$val\"" >> "$target_file"
+    fi
+    
+    # Special case: Sync TOKEN, CHAT_ID, and GATEKEEPER_IDS to boot.conf for Gatekeeper
+    if [[ "$key" == "TOKEN" || "$key" == "CHAT_ID" || "$key" == "GATEKEEPER_IDS" ]] && [[ "$target_file" == *"/config/something.conf" ]]; then
+        update_conf_val "$key" "$val" "$DIR/config/boot.conf"
+    fi
+
+    # Update current shell variable
+    printf -v "$key" "%s" "$val"
+}

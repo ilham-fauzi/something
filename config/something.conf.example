@@ -14,3 +14,7 @@ LOG_FILE="./logs/something.log"
 
 # Enabled Modules (comma separated)
 ENABLED_MODULES="system,pm2,redis"
+
+# Selective Gatekeeper IDs (optional, defaults to all in CHAT_ID)
+# GATEKEEPER_IDS="12345678,87654321"
+GATEKEEPER_IDS="all"

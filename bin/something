@@ -6,14 +6,97 @@
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PID_FILE="$DIR/something.pid"
 ENGINE="$DIR/lib/engine.sh"
+LOG_FILE="$DIR/logs/something.log"
+
+# Source utilities early to have access to load_config and logging
+source "$DIR/lib/utils.sh"
+source "$DIR/lib/telegram.sh"
+
+manage_vault() {
+    local action=$1
+    local conf_file="$DIR/config/something.conf"
+    local enc_file="$DIR/config/something.conf.enc"
+
+    case "$action" in
+        lock)
+            if [ ! -f "$conf_file" ]; then
+                echo "❌ Error: Plain text config file not found."
+                return 1
+            fi
+            read -s -p "🔑 Create a Master Key to lock your config: " master_key
+            echo ""
+            if encrypt_file "$conf_file" "$enc_file" "$master_key"; then
+                rm "$conf_file"
+                log_info "Vault LOCKED: Config encrypted and plaintext deleted"
+                echo "✅ Config locked and encrypted. Plain text file deleted."
+                echo "💡 Tip: You will need this key to start or setup the application."
+            else
+                log_error "Vault LOCK FAILED: Encryption error"
+                echo "❌ Error: Encryption failed."
+            fi
+            ;;
+        unlock)
+            if [ ! -f "$enc_file" ]; then
+                echo "❌ Error: Encrypted config file not found."
+                return 1
+            fi
+            read -s -p "🔑 Enter Master Key to unlock: " master_key
+            echo ""
+            if decrypt_file "$enc_file" "$master_key" > "$conf_file"; then
+                chmod 600 "$conf_file"
+                log_info "Vault UNLOCKED: Plaintext config restored"
+                echo "✅ Config unlocked. Plain text file restored with secure permissions (600)."
+            else
+                rm -f "$conf_file"
+                log_error "Vault UNLOCK FAILED: Incorrect key"
+                echo "❌ Error: Decryption failed. Incorrect key?"
+            fi
+            ;;
+        generate)
+            local key=$(openssl rand -base64 24)
+            echo "🔑 Your New Secure Master Key: $key"
+            echo "⚠️  IMPORTANT: Save this key safely! If you lose it, you cannot unlock your vault."
+            ;;
+        *)
+            echo "Usage: something vault {lock|unlock|generate}"
+            ;;
+    esac
+}
+
+# Redundant load_config removed, now uses version from lib/utils.sh
 
 start() {
+    local modules=$@
+    load_config "$DIR" || return 1
+
+    # Auto-Vaulting: If plaintext config exists alongside encrypted, delete plaintext after load
+    if [ -f "$DIR/config/something.conf" ] && [ -f "$DIR/config/something.conf.enc" ]; then
+        rm "$DIR/config/something.conf"
+        log_info "Auto-Vaulting: Plaintext config deleted after successful load (encrypted version exists)"
+        echo "🔒 Auto-Vaulting: Plaintext config deleted for security (loaded into memory)."
+    fi
+
     if [ -f "$PID_FILE" ]; then
         echo "Something is already running (PID: $(cat "$PID_FILE"))"
         return
     fi
-    echo "Starting Something framework..."
-    nohup bash "$ENGINE" > /dev/null 2>&1 &
+
+    # Handle 'all' or empty arguments
+    if [ -z "$modules" ] || [ "$modules" == "all" ]; then
+        local enabled_list=$(echo "$ENABLED_MODULES" | tr ',' ' ')
+        echo "⚠️  You are about to start ALL enabled modules: $enabled_list"
+        read -p "   Continue? (y/n): " confirm
+        if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+            echo "❌ Operation cancelled."
+            return
+        fi
+        modules="$enabled_list"
+        echo "Starting Something framework (all modules)..."
+    else
+        echo "Starting Something framework with modules: $modules..."
+    fi
+
+    nohup bash "$ENGINE" $modules > /dev/null 2>&1 &
     echo $! > "$PID_FILE"
     echo "Started (PID: $(cat "$PID_FILE"))"
 }
@@ -122,197 +205,230 @@ EOF
 
 
 
-update_conf_val() {
-    local key=$1
-    local val=$2
-    local conf_file="$DIR/config/something.conf"
-    
-    # Ensure config file exists
-    touch "$conf_file"
 
-    if grep -q "^[[:space:]]*$key=" "$conf_file"; then
-        # Key exists, update it
-        if [[ "$OSTYPE" == "darwin"* ]]; then
-            sed -i '' "s|^[[:space:]]*$key=.*|$key=\"$val\"|" "$conf_file"
-        else
-            sed -i "s|^[[:space:]]*$key=.*|$key=\"$val\"|" "$conf_file"
-        fi
+
+setup_systemd() {
+    # ... (remains same)
+    if ! command -v systemctl >/dev/null 2>&1; then
+        echo "❌ Error: systemctl not found. This feature is only for Linux systems with systemd."
+        return 1
+    fi
+
+    local service_file="/etc/systemd/system/something.service"
+    local user=$(whoami)
+    local gatekeeper_bin="$DIR/bin/something-gatekeeper"
+
+    echo "⚙️  Generating systemd service unit..."
+    echo "-----------------------------------"
+    echo "User: $user"
+    echo "Path: $DIR"
+
+    # Create the service content in a temporary file first
+    local temp_service="/tmp/something.service"
+    cat <<EOF > "$temp_service"
+[Unit]
+Description=Something Monitoring Framework Gatekeeper
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$user
+WorkingDirectory=$DIR
+ExecStart=/bin/bash $gatekeeper_bin
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:$DIR/logs/gatekeeper.log
+StandardError=append:$DIR/logs/gatekeeper.log
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    echo "⚠️  Systemd requires sudo permissions to write to /etc/systemd/system/"
+    if sudo mv "$temp_service" "$service_file"; then
+        sudo chmod 644 "$service_file"
+        echo "✅ Service file created at $service_file"
+        
+        echo "📡 Reloading systemd daemon..."
+        sudo systemctl daemon-reload
+        
+        echo "🚀 Enabling something.service..."
+        sudo systemctl enable something.service
+        
+        echo ""
+        echo "✨ Systemd integration COMPLETED!"
+        echo "-----------------------------------"
+        echo "The Gatekeeper will now start automatically on boot."
+        echo "You can start it now with: sudo systemctl start something"
+        echo "Check status with: systemctl status something"
     else
-        # Key doesn't exist, append it
-        # Add a newline if the file doesn't end with one
-        if [ -s "$conf_file" ] && [ -n "$(tail -c1 "$conf_file" 2>/dev/null)" ]; then
-            echo "" >> "$conf_file"
-        fi
-        echo "$key=\"$val\"" >> "$conf_file"
-    fi
-    
-    # Update current shell variable
-    printf -v "$key" "%s" "$val"
-}
-
-
-
-sequential_telegram_config() {
-    # Refresh config
-    source "$DIR/config/something.conf"
-    echo ""
-    echo "⚙️  Telegram Configuration"
-    echo "-------------------------"
-    
-    # 1. Bot Token
-    local current_token="$TOKEN"
-    local display_token="${current_token:0:10}..."
-    [ -z "$current_token" ] && display_token="None"
-    
-    read -p "Bot Token [$display_token]: " new_token
-    new_token=$(echo "$new_token" | xargs) # Trim whitespace
-    if [ -n "$new_token" ]; then
-        update_conf_val "TOKEN" "$new_token"
-        echo "✅ Bot Token updated."
-    fi
-
-    # 2. Chat ID
-    local current_id="$CHAT_ID"
-    [ -z "$current_id" ] && current_id="None"
-    
-    read -p "Chat ID [$current_id] (Type 'auto' to detect): " new_id
-    new_id=$(echo "$new_id" | xargs) # Trim whitespace
-    if [ -n "$new_id" ]; then
-        if [ "$new_id" == "auto" ]; then
-            echo "🔍 Attempting to auto-detect Chat ID..."
-            echo "👉 STEP 1: Open your Telegram app."
-            echo "👉 STEP 2: Search for bot @v60pro_bot (or your current bot name)."
-            echo "👉 STEP 3: Send the command /start to the bot."
-            
-            while true; do
-                read -p "Press ENTER once command is sent (or type 'skip'): " choice
-                [ "$choice" == "skip" ] && break
-                
-                # Use the most recent token from shell
-                local active_token="$TOKEN"
-                echo "📡 Fetching updates from Telegram..."
-                local update=$(curl -s "https://api.telegram.org/bot$active_token/getUpdates?limit=5&offset=-1")
-                
-                # Robust extraction: look for any chat ID in the result
-                local found_id=$(echo "$update" | jq -r '
-                    .result | reverse | .[] | 
-                    ( .message.chat.id // .my_chat_member.chat.id // .callback_query.message.chat.id // .channel_post.chat.id )
-                ' 2>/dev/null | head -n 1)
-                
-                if [ "$found_id" != "null" ] && [ -n "$found_id" ]; then
-                    echo "✅ Found Chat ID: $found_id"
-                    update_conf_val "CHAT_ID" "$found_id"
-                    break
-                else
-                    echo "❌ Could not find any new messages/commands."
-                    echo "💡 Tip: Make sure you sent /start to @v60pro_bot."
-                    echo "------------------------------------------------"
-                fi
-            done
-        else
-            update_conf_val "CHAT_ID" "$new_id"
-            echo "✅ Chat ID updated."
-        fi
+        echo "❌ Failed to create service file. Sudo permission denied?"
+        return 1
     fi
 }
-
 
 setup_modules() {
-    echo "🔍 Scanning enabled modules for dependencies..."
-    source "$DIR/config/something.conf"
-    source "$DIR/lib/utils.sh"
+    local target_arg=$1
+    shift # Shift to see the rest of arguments
     
-    echo ""
-    # Check core dependencies
-    install_dependencies "curl" "jq"
+    load_config "$DIR" || return 1
+    source "$DIR/lib/utils.sh"
 
-    # Mandatory sequential config
-    sequential_telegram_config
-
-    echo ""
-    echo "⚙️  Core Configuration"
-    local core_vars=(
-        "CHECK_INTERVAL:Check interval in seconds:60"
-        "LOG_FILE:Log file path:$DIR/logs/something.log"
-    )
-    for var_entry in "${core_vars[@]}"; do
-        local key=$(echo "$var_entry" | cut -d':' -f1)
-        local desc=$(echo "$var_entry" | cut -d':' -f2)
-        local default=$(echo "$var_entry" | cut -d':' -f3)
-        local current="${!key}"
-        [ -z "$current" ] && current=$default
+    # Handle fast Chat ID addition
+    if [[ "$target_arg" == "-a" || "$target_arg" == "--add-chat" ]]; then
+        local input_id=$1
+        local new_id=""
         
-        read -p "   $desc [$current]: " new_val
-        if [ -n "$new_val" ]; then
-            update_conf_val "$key" "$new_val"
-            echo "   ✅ $key updated."
-        elif ! grep -q "^[[:space:]]*$key=" "$DIR/config/something.conf"; then
-            update_conf_val "$key" "$current"
-            echo "   ✅ $key initialized."
+        if [ -z "$input_id" ] || [ "$input_id" == "auto" ]; then
+            new_id=$(auto_detect_chat_id)
+        else
+            new_id="$input_id"
         fi
-    done
-    # Process enabled modules
-    IFS=',' read -ra ADDR <<< "$ENABLED_MODULES"
-    for module in "${ADDR[@]}"; do
-        module=$(echo "$module" | xargs) # Trim whitespace
-        [ -z "$module" ] && continue
         
+        if [ -n "$new_id" ]; then
+            if [ -n "$CHAT_ID" ] && [[ "$CHAT_ID" != "None" ]]; then
+                # Check if already exists
+                if [[ ",$CHAT_ID," == *",$new_id,"* ]]; then
+                    echo "ℹ️  Chat ID $new_id is already in the list."
+                else
+                    update_conf_val "CHAT_ID" "$CHAT_ID,$new_id"
+                    echo "✅ Chat ID $new_id added to authorized list."
+                fi
+            else
+                update_conf_val "CHAT_ID" "$new_id"
+                echo "✅ Chat ID $new_id set as authorized user."
+            fi
+            # Ask for gatekeeper re-config
+            configure_gatekeeper
+        fi
+        return
+    fi
+    
+    if [ -z "$target_arg" ]; then
+        echo "⚙️  Core Configuration Setup"
+        echo "--------------------------"
+        # Check core dependencies
+        install_dependencies "curl" "jq"
+
+        # Mandatory sequential config
+        sequential_telegram_config
+
+        echo ""
+        echo "🛠  Core Variables"
+        local core_vars=(
+            "CHECK_INTERVAL:Check interval in seconds:60"
+            "LOG_FILE:Log file path:$DIR/logs/something.log"
+        )
+        for var_entry in "${core_vars[@]}"; do
+            local key=$(echo "$var_entry" | cut -d':' -f1)
+            local desc=$(echo "$var_entry" | cut -d':' -f2)
+            local default=$(echo "$var_entry" | cut -d':' -f3)
+            local current="${!key}"
+            [ -z "$current" ] && current=$default
+            
+            read -p "   $desc [$current]: " new_val
+            if [ -n "$new_val" ]; then
+                update_conf_val "$key" "$new_val"
+                echo "   ✅ $key updated."
+            elif ! grep -q "^[[:space:]]*$key=" "$DIR/config/something.conf"; then
+                update_conf_val "$key" "$current"
+                echo "   ✅ $key initialized."
+            fi
+        done
+
+        # Guidance for Gatekeeper
+        if [ ! -f "$DIR/config/boot.conf" ]; then
+            echo ""
+            echo "🛡  Security: Gatekeeper Setup"
+            echo "It seems you haven't configured the auto-start Gatekeeper yet."
+            echo "This allows you to remotely unlock your framework after a reboot."
+            read -p "❓ Would you like to enable Gatekeeper (systemd) now? (y/n) [default: y]: " enable_gk
+            if [[ ! "$enable_gk" =~ ^[Nn]$ ]]; then
+                setup_systemd
+            fi
+        fi
+
+        echo ""
+        echo "✅ Core setup completed."
+        echo "💡 Tip: To setup a specific module, use: something setup --module-name (e.g., --pm2)"
+        echo "💡 Tip: To enable auto-start on boot, use: something setup --system"
+        return
+    fi
+
+    # Handle systemd setup
+    if [[ "$target_arg" == "--system" ]]; then
+        setup_systemd
+        return
+    fi
+
+    # Process specific module if argument starts with --
+    if [[ "$target_arg" == --* ]]; then
+        local module=$(echo "$target_arg" | sed 's/^--//')
         local mod_path="$DIR/modules/$module.sh"
-        if [ -f "$mod_path" ]; then
-            # Clean up previous module definitions
-            unset module_dependencies
-            unset -f module_setup
-            
-            source "$mod_path"
-            echo "📦 Module: $module"
-            
-            # 1. Install defined dependencies
-            if [[ "$(declare -p module_dependencies 2>/dev/null)" == "declare -a"* ]]; then
-                install_dependencies "${module_dependencies[@]}"
-            fi
-            
-            # 2. Run custom setup if exists
-            if declare -f module_setup > /dev/null; then
-                module_setup
-            fi
-
-            # 3. Handle configurable module variables
-            if [[ "$(declare -p module_vars 2>/dev/null)" == "declare -a"* ]]; then
-                echo "⚙️  Configuring variables for $module..."
-                for var_entry in "${module_vars[@]}"; do
-                    # Format: KEY:Description:Default
-                    local key=$(echo "$var_entry" | cut -d':' -f1)
-                    local desc=$(echo "$var_entry" | cut -d':' -f2)
-                    local default=$(echo "$var_entry" | cut -d':' -f3)
-                    
-                    # Get current value from config or default
-                    local current="${!key}"
-                    [ -z "$current" ] && current=$default
-                    
-                    read -p "   $desc [$current]: " new_val
-                    if [ -n "$new_val" ]; then
-                        update_conf_val "$key" "$new_val"
-                        echo "   ✅ $key updated in config."
-                    elif ! grep -q "^[[:space:]]*$key=" "$DIR/config/something.conf"; then
-                        # If key doesn't exist in config at all, save the current/default value
-                        update_conf_val "$key" "$current"
-                        echo "   ✅ $key initialized in config."
-                    fi
-
-                done
-            fi
+        
+        if [ ! -f "$mod_path" ]; then
+            echo "❌ Error: Module '$module' not found at $mod_path"
+            echo "Available modules: $(ls "$DIR/modules" | sed 's/\.sh//g' | xargs)"
+            return 1
         fi
-    done
-    echo "✅ Setup completed."
+
+        echo "📦 Setting up module: $module"
+        echo "---------------------------"
+        
+        # Clean up previous module definitions
+        unset module_dependencies
+        unset -f module_setup
+        unset module_vars
+        
+        source "$mod_path"
+        
+        # 1. Install defined dependencies
+        if [[ "$(declare -p module_dependencies 2>/dev/null)" == "declare -a"* ]]; then
+            install_dependencies "${module_dependencies[@]}"
+        fi
+        
+        # 2. Run custom setup if exists
+        if declare -f module_setup > /dev/null; then
+            module_setup
+        fi
+
+        # 3. Handle configurable module variables
+        if [[ "$(declare -p module_vars 2>/dev/null)" == "declare -a"* ]]; then
+            echo "⚙️  Configuring variables..."
+            for var_entry in "${module_vars[@]}"; do
+                local key=$(echo "$var_entry" | cut -d':' -f1)
+                local desc=$(echo "$var_entry" | cut -d':' -f2)
+                local default=$(echo "$var_entry" | cut -d':' -f3)
+                
+                local current="${!key}"
+                [ -z "$current" ] && current=$default
+                
+                read -p "   $desc [$current]: " new_val
+                if [ -n "$new_val" ]; then
+                    update_conf_val "$key" "$new_val"
+                    echo "   ✅ $key updated in config."
+                elif ! grep -q "^[[:space:]]*$key=" "$DIR/config/something.conf"; then
+                    update_conf_val "$key" "$current"
+                    echo "   ✅ $key initialized in config."
+                fi
+            done
+        fi
+        echo "✅ Module $module setup completed."
+    else
+        echo "Usage: something setup [-a <id|auto>|--module-name|--system]"
+        return 1
+    fi
 }
 
 case "$1" in
-    start) start ;;
+    start) shift; start "$@" ;;
     stop) stop ;;
     restart) stop; sleep 1; start ;;
     status) status ;;
     logs) tail -f "$DIR/logs/something.log" ;;
-    setup) setup_modules ;;
+    setup) shift; setup_modules "$@" ;;
+    vault) manage_vault "$2" ;;
     create)
         if [ "$2" == "-m" ]; then
             create_module "$3"
@@ -320,5 +436,5 @@ case "$1" in
             echo "Usage: something create -m <module_name>"
         fi
         ;;
-    *) echo "Usage: something {start|stop|restart|status|logs|create|setup}" ;;
+    *) echo "Usage: something {start|stop|restart|status|logs|create|setup|vault}" ;;
 esac

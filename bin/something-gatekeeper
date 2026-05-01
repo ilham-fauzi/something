@@ -1,0 +1,109 @@
+#!/bin/bash
+
+# 'Something' Telegram Gatekeeper
+# Listens for Master Key on boot to unlock the system
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BOOT_CONF="$DIR/config/boot.conf"
+LOG_FILE="$DIR/logs/gatekeeper.log"
+
+source "$DIR/lib/utils.sh"
+
+log_info "Gatekeeper started. Waiting for remote unlock..."
+
+if [ ! -f "$BOOT_CONF" ]; then
+    log_error "Boot config missing at $BOOT_CONF. Cannot start Gatekeeper."
+    exit 1
+fi
+
+source "$BOOT_CONF"
+
+if [ -z "$TOKEN" ] || [ -z "$CHAT_ID" ]; then
+    log_error "TOKEN or CHAT_ID missing in $BOOT_CONF."
+    exit 1
+fi
+
+TELEGRAM_API="https://api.telegram.org/bot$TOKEN"
+
+send_gatekeeper_msg() {
+    local text=$1
+    local target_ids=${2:-$CHAT_ID}
+    # Support multiple Chat IDs from boot.conf
+    IFS=',' read -ra ADDR <<< "$target_ids"
+    for id in "${ADDR[@]}"; do
+        local clean_id=$(echo "$id" | xargs)
+        [ -z "$clean_id" ] && continue
+        curl -s -X POST "$TELEGRAM_API/sendMessage" \
+            -d chat_id="$clean_id" \
+            -d text="$text" \
+            -d parse_mode="HTML" > /dev/null
+    done
+}
+
+# Determine who is authorized to unlock
+AUTHORIZED_GK_IDS="$GATEKEEPER_IDS"
+if [ -z "$AUTHORIZED_GK_IDS" ] || [ "$AUTHORIZED_GK_IDS" == "all" ]; then
+    AUTHORIZED_GK_IDS="$CHAT_ID"
+fi
+
+# 1. Notify all authorized users that system is waiting
+send_gatekeeper_msg "⚠️ <b>Something Framework: Server Rebooted</b>
+System is currently <b>LOCKED</b>.
+Please send your <b>Master Key</b> to this bot to activate monitoring."
+
+# 2. Polling for the key
+LAST_UPDATE_ID=0
+log_info "Poling Telegram for Master Key from authorized Gatekeepers: $AUTHORIZED_GK_IDS"
+
+while true; do
+    updates=$(curl -s "$TELEGRAM_API/getUpdates?offset=$((LAST_UPDATE_ID + 1))&timeout=30")
+    
+    # Check if we got a valid response
+    if [ $? -ne 0 ]; then
+        sleep 5
+        continue
+    fi
+
+    # Process updates
+    results=$(echo "$updates" | jq -c ".result[]" 2>/dev/null)
+    if [ -z "$results" ]; then continue; fi
+
+    while read -r update; do
+        update_id=$(echo "$update" | jq -r ".update_id")
+        LAST_UPDATE_ID=$update_id
+        
+        msg_chat_id=$(echo "$update" | jq -r ".message.chat.id")
+        text=$(echo "$update" | jq -r ".message.text")
+
+        # Security: Only accept from authorized Gatekeeper IDs
+        if [[ ",$AUTHORIZED_GK_IDS," == *",$msg_chat_id,"* ]] && [ -n "$text" ]; then
+            log_info "Received potential key from authorized chat ($msg_chat_id). Attempting to unlock..."
+            
+            # Attempt to start the main app with this key
+            # We export MASTER_KEY so 'something start' can use it
+            # We also export G_SENDER_ID to verify the sender's identity against the vault
+            export MASTER_KEY="$text"
+            export G_SENDER_ID="$msg_chat_id"
+            
+            # Check if key is correct by attempting a load_config check (silently)
+            if [ -f "$DIR/config/something.conf.enc" ]; then
+                 # Try to decrypt and start. Verification happens inside load_config.
+                 if bash "$DIR/bin/something" start all <<< "y" | grep -q "Started"; then
+                     send_gatekeeper_msg "✅ <b>Success!</b> System unlocked and monitoring is active.
+Gatekeeper is now exiting. Have a nice day! 👋"
+                     log_info "System unlocked successfully. Gatekeeper exiting."
+                     exit 0
+                 else
+                     send_gatekeeper_msg "❌ <b>Incorrect Key.</b> Please try again."
+                     log_warn "Incorrect key received via Telegram."
+                 fi
+            else
+                # No vault? just start
+                bash "$DIR/bin/something" start all
+                exit 0
+            fi
+        fi
+    done <<< "$results"
+    
+    sleep 2
+done

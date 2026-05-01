@@ -9,12 +9,14 @@ module_commands=("/status" "/logs" "/restart")
 # Configuration for this module (Defaults)
 APP_NAME="${APP_NAME:-v60.pro}"
 APP_URL="${APP_URL:-http://localhost:3000}"
+AUTO_RESTART="${AUTO_RESTART:-true}"
 
 
 # Metadata for interactive setup
 module_vars=(
     "APP_NAME:PM2 App Name:v60.pro"
     "APP_URL:App URL:http://localhost:3000"
+    "AUTO_RESTART:Enable Auto Restart (true/false):true"
 )
 
 # Module Dependencies
@@ -33,6 +35,19 @@ module_setup() {
     else
         echo "✅ PM2 is already installed."
     fi
+
+    echo ""
+    echo "🤖 Auto-Restart Feature"
+    echo "This feature allows 'Something' to automatically restart your app if it goes down."
+    read -p "❓ Enable auto-restart for $APP_NAME? (y/n) [default: $AUTO_RESTART]: " choice
+    if [[ "$choice" =~ ^[Yy]$ ]]; then
+        update_conf_val "AUTO_RESTART" "true"
+        echo "   ✅ Auto-restart ENABLED."
+    elif [[ "$choice" =~ ^[Nn]$ ]]; then
+        update_conf_val "AUTO_RESTART" "false"
+        echo "   ✅ Auto-restart DISABLED. (You can still restart manually via Telegram /restart)"
+    fi
+
     return 0
 }
 
@@ -41,16 +56,24 @@ module_check() {
     local status=$(pm2 jlist | jq -r ".[] | select(.name==\"$APP_NAME\") | .pm2_env.status")
     
     if [ "$status" != "online" ]; then
-        echo "ALERT: $APP_NAME is $status! Attempting restart..."
-        pm2 restart "$APP_NAME"
+        if [ "$AUTO_RESTART" == "true" ]; then
+            echo "ALERT: $APP_NAME is $status! Attempting auto-restart..."
+            pm2 restart "$APP_NAME" > /dev/null
+        else
+            echo "ALERT: $APP_NAME is $status! (Auto-restart is disabled. Use /restart to fix)"
+        fi
         return 1
     fi
 
     # URL Check
     local http_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$APP_URL")
     if [[ "$http_code" == 5* ]]; then
-        echo "ALERT: $APP_NAME returned $http_code! Restarting..."
-        pm2 restart "$APP_NAME"
+        if [ "$AUTO_RESTART" == "true" ]; then
+            echo "ALERT: $APP_NAME returned $http_code! Attempting auto-restart..."
+            pm2 restart "$APP_NAME" > /dev/null
+        else
+            echo "ALERT: $APP_NAME returned $http_code! (Auto-restart is disabled. Use /restart to fix)"
+        fi
         return 1
     fi
 

@@ -1,5 +1,7 @@
 # Something Framework - Git Ignore
 config/something.conf
+config/boot.conf
+config/*.enc
 something.pid
 logs/
 *.log

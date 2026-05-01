@@ -4,8 +4,11 @@
 # Handles module loading, Telegram polling, and health checks
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-source "$DIR/config/something.conf"
+LOG_FILE="$DIR/logs/something.log"
 source "$DIR/lib/utils.sh"
+load_config "$DIR" || { log_error "Failed to load configuration. Engine exiting."; exit 1; }
+# Security: Unset MASTER_KEY from environment after successful load
+unset MASTER_KEY
 source "$DIR/lib/telegram.sh"
 
 # Global state
@@ -13,9 +16,23 @@ LAST_UPDATE_ID=0
 
 # Load Modules
 load_modules() {
+    local requested_modules=$@
     log_info "Loading modules..."
-    IFS=',' read -ra ADDR <<< "$ENABLED_MODULES"
+    
+    local modules_to_load=""
+    if [ -n "$requested_modules" ]; then
+        # Use modules provided in arguments
+        modules_to_load=$(echo "$requested_modules" | tr ' ' ',')
+        # Update ENABLED_MODULES globally for this session so other functions use it
+        ENABLED_MODULES="$modules_to_load"
+    else
+        # Use modules from config
+        modules_to_load="$ENABLED_MODULES"
+    fi
+
+    IFS=',' read -ra ADDR <<< "$modules_to_load"
     for module in "${ADDR[@]}"; do
+        module=$(echo "$module" | xargs) # Trim whitespace
         local mod_path="$DIR/modules/$module.sh"
         if [ -f "$mod_path" ]; then
             source "$mod_path"
@@ -105,7 +122,7 @@ run_health_checks() {
 # Main Loop
 main() {
     log_info "Starting 'Something' Engine..."
-    load_modules
+    load_modules "$@"
     send_message "🚀 <b>'Something' Monitoring Framework is UP</b>"
 
     local last_check=0
@@ -122,4 +139,4 @@ main() {
     done
 }
 
-main
+main "$@"

@@ -183,3 +183,17 @@ update_conf_val() {
     # Update current shell variable
     printf -v "$key" "%s" "$val"
 }
+
+# Registry: Resolve short name to Git URL
+resolve_module_url() {
+    local name=$1
+    case "$name" in
+        "redis") echo "https://github.com/something-framework/module-redis.git" ;;
+        "pm2")   echo "https://github.com/something-framework/module-pm2.git" ;;
+        "mysql") echo "https://github.com/something-framework/module-mysql.git" ;;
+        "nginx") echo "https://github.com/something-framework/module-nginx.git" ;;
+        "docker") echo "https://github.com/something-framework/module-docker.git" ;;
+        *) return 1 ;;
+    esac
+    return 0
+}

@@ -81,29 +81,49 @@ The `something` CLI is your control center.
 ### 🔨 Development
 | Command | Description |
 | :--- | :--- |
-| `something create -m <name>` | Generate a boilerplate for a new monitoring module. |
+| `something create -m <name>` | Generate a boilerplate directory for a new monitoring module. |
+| `something module` | Install, remove, list, or update external modules. |
+
+---
+
+## 📦 Module Management
+The framework supports installing modules from Git repositories or via the internal **Registry**.
+
+| Command | Description |
+| :--- | :--- |
+| `something module list` | List all installed internal and external modules. |
+| `something module install <name>` | Install from Registry (e.g., `redis`, `pm2`, `mysql`). |
+| `something module install <url>` | Install a module from any custom Git repository. |
+| `something module install <url> --as <name>` | Install with a custom local name (prevents collisions). |
+| `something module update` | Pull latest updates for all installed Git modules. |
+| `something module remove <name>` | Remove an installed module. |
 
 ---
 
 ## 🔌 Developer Guide: Creating Modules
 
-Modules are simple bash scripts located in `modules/`.
+Modules should be structured as separate directories (`modules/name/module.sh`) for better repository management.
 
 1.  **Generate a new module**:
     ```bash
-    bin/something create -m my_service
+    something create -m my_service
     ```
+    *This creates a folder `modules/my_service/` with a boilerplate `module.sh`.*
+
 2.  **Implement your logic**:
-    -   `module_setup`: Define variables the user needs to provide.
-    -   `module_check`: The core logic that runs every cycle. Use `send_msg "Alert text"` for notifications.
+    -   `my_service_setup`: Define variables the user needs to provide.
+    -   `my_service_check`: The core logic that runs every cycle.
+    -   `my_service_handle_command`: Responds to Telegram commands.
 
 Example `modules/my_service.sh`:
 ```bash
-module_check() {
-    status=$(check_service_health)
+my_service_check() {
+    # Perform health check
     if [ "$status" != "OK" ]; then
-        send_msg "🚨 My Service is DOWN on $(hostname)!"
+        echo "🚨 My Service is DOWN on $(hostname)!"
+        return 1
     fi
+    return 0
 }
 ```
 

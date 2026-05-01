@@ -21,12 +21,12 @@ module_vars=(
 module_dependencies=()
 
 
-module_setup() {
+system_setup() {
     echo "Setting up $module_name..."
     return 0
 }
 
-module_check() {
+system_check() {
     # System health check logic
     local ram_usage=$(free | grep Mem | awk '{print $3/$2 * 100.0}' | cut -d. -f1)
     local disk_usage=$(df / | tail -1 | awk '{print $5}' | sed 's/%//')
@@ -44,7 +44,7 @@ module_check() {
     return 0
 }
 
-module_handle_command() {
+system_handle_command() {
     local cmd=$1
     case "$cmd" in
         "/system")

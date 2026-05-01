@@ -12,6 +12,38 @@ LOG_FILE="$DIR/logs/something.log"
 source "$DIR/lib/utils.sh"
 source "$DIR/lib/telegram.sh"
 
+show_help() {
+    echo "🛸 Something Framework - CLI v1.1"
+    echo "--------------------------------"
+    echo "Usage: something <command> [args]"
+    echo ""
+    echo "🚀 Operations:"
+    echo "  start [mod]    Start the engine (all modules or specific one)"
+    echo "  stop [mod]     Stop the engine or specific module"
+    echo "  restart        Restart the framework"
+    echo "  status         Check if engine is running and show uptime"
+    echo "  logs           Tail the framework logs"
+    echo ""
+    echo "⚙️  Configuration:"
+    echo "  setup          Run interactive setup wizard"
+    echo "  setup -a auto  Fast-track: Auto-detect Chat ID"
+    echo "  setup --system Install systemd service (Gatekeeper)"
+    echo "  vault <action> Manage encrypted vault (lock|unlock|generate)"
+    echo ""
+    echo "📦 Module Management:"
+    echo "  module list           List installed modules"
+    echo "  module install <url|name>  Install module from Git repo or Registry"
+    echo "  module update [mod]        Update all or specific module"
+    echo "  module remove <mod>        Delete a module"
+    echo ""
+    echo "🔨 Development:"
+    echo "  create -m <name>      Generate boilerplate for new module"
+    echo ""
+    echo "❓ Misc:"
+    echo "  help, --help, -h      Show this help message"
+    echo ""
+}
+
 manage_vault() {
     local action=$1
     local conf_file="$DIR/config/something.conf"
@@ -138,17 +170,19 @@ create_module() {
     fi
 
     # Sanitize module name for filename
-    local filename=$(echo "$module_name" | tr '[:upper:]' '[:lower:]' | tr ' ' '_')
-    local target="$DIR/modules/$filename.sh"
+    local mod_slug=$(echo "$module_name" | tr '[:upper:]' '[:lower:]' | tr ' ' '_')
+    local target_dir="$DIR/modules/$mod_slug"
+    local target_file="$target_dir/module.sh"
 
-    if [ -f "$target" ]; then
-        echo "Error: Module '$filename' already exists at $target"
+    if [ -d "$target_dir" ] || [ -f "$DIR/modules/$mod_slug.sh" ]; then
+        echo "❌ Error: Module '$mod_slug' already exists."
         return 1
     fi
 
-    echo "Generating template for module: $module_name..."
+    mkdir -p "$target_dir"
+    echo "Generating template for module: $module_name in $target_dir..."
     
-    cat <<EOF > "$target"
+    cat <<EOF > "$target_file"
 #!/bin/bash
 
 # Module: $module_name
@@ -193,14 +227,128 @@ module_handle_command() {
 EOF
 
 
-    chmod +x "$target"
-    echo "Module created: $target"
+    chmod +x "$target_file"
+    echo "✅ Module created: $target_file"
     echo ""
-    echo "To enable and setup this module:"
-    echo "1. Open $DIR/config/something.conf"
-    echo "2. Add '$filename' to ENABLED_MODULES"
-    echo "3. Run setup: something setup"
-    echo "4. Restart: something restart"
+    echo "💡 To finish installation:"
+    echo "1. Run setup: something setup --$mod_slug"
+    echo "2. Add to ENABLED_MODULES in config/something.conf"
+    echo "3. Restart: something restart"
+}
+
+manage_modules() {
+    local action=$1
+    shift
+    
+    case "$action" in
+        install)
+            local url=$1
+            local alias_flag=$2
+            local custom_name=$3
+            
+            if [ -z "$url" ]; then
+                echo "Usage: something module install <url|name> [--as name]"
+                return 1
+            fi
+
+            # Check if it's a short name from registry
+            if [[ ! "$url" =~ ^https?:// ]] && [[ ! "$url" =~ ^git@ ]]; then
+                echo "🔍 Checking registry for '$url'..."
+                local resolved_url=$(resolve_module_url "$url")
+                if [ -n "$resolved_url" ]; then
+                    echo "✨ Found in registry: $resolved_url"
+                    url="$resolved_url"
+                else
+                    echo "❌ Error: '$url' is not a URL and was not found in the registry."
+                    return 1
+                fi
+            fi
+
+            # Determine module name
+            local mod_name=$(basename "$url" .git)
+            if [[ "$alias_flag" == "--as" && -n "$custom_name" ]]; then
+                mod_name="$custom_name"
+            fi
+
+            local target_dir="$DIR/modules/$mod_name"
+            if [ -d "$target_dir" ] || [ -f "$DIR/modules/$mod_name.sh" ]; then
+                echo "❌ Error: Module '$mod_name' already exists."
+                return 1
+            fi
+
+            echo "📦 Installing module '$mod_name' from $url..."
+            if git clone "$url" "$target_dir"; then
+                echo "✅ Module installed successfully."
+                
+                # Check for module entry point
+                if [ ! -f "$target_dir/module.sh" ]; then
+                    echo "⚠️  Warning: No module.sh found in $target_dir. This might not be a valid 'Something' module."
+                fi
+
+                echo ""
+                echo "💡 To finish installation:"
+                echo "1. Run setup: something setup --$mod_name"
+                echo "2. Add to ENABLED_MODULES in config/something.conf"
+            else
+                echo "❌ Error: Failed to clone repository."
+                return 1
+            fi
+            ;;
+        list)
+            echo "Installed Modules:"
+            echo "------------------"
+            ls -F "$DIR/modules" | grep -v '.gitignore' | while read -r line; do
+                # Remove trailing /, @, or * from ls -F
+                local raw_name=$(echo "$line" | sed 's/[/@\*]$//')
+                local name="$raw_name"
+                local status="[Internal]"
+                
+                if [[ "$line" == */ ]]; then
+                    status="[External]"
+                else
+                    name="${raw_name%.sh}"
+                fi
+                echo " - $name $status"
+            done
+            ;;
+        remove)
+            local mod_name=$1
+            if [ -z "$mod_name" ]; then
+                echo "Usage: something module remove <name>"
+                return 1
+            fi
+            
+            read -p "❓ Are you sure you want to remove '$mod_name'? (y/n): " confirm
+            if [[ "$confirm" =~ ^[Yy]$ ]]; then
+                rm -rf "$DIR/modules/$mod_name"
+                rm -f "$DIR/modules/$mod_name.sh"
+                echo "✅ Module '$mod_name' removed."
+            fi
+            ;;
+        update)
+            local mod_name=$1
+            if [ -z "$mod_name" ]; then
+                echo "Updating all external modules..."
+                for d in "$DIR/modules"/*/; do
+                    if [ -d "$d/.git" ]; then
+                        echo "🔄 Updating $(basename "$d")..."
+                        (cd "$d" && git pull)
+                    fi
+                done
+            else
+                local target="$DIR/modules/$mod_name"
+                if [ -d "$target/.git" ]; then
+                    echo "🔄 Updating $mod_name..."
+                    (cd "$target" && git pull)
+                else
+                    echo "❌ Error: '$mod_name' is not a git-based module."
+                fi
+            fi
+            ;;
+        *)
+            echo "Usage: something module {install|remove|list|update}"
+            ;;
+    esac
 }
 
 
@@ -365,11 +513,19 @@ setup_modules() {
     # Process specific module if argument starts with --
     if [[ "$target_arg" == --* ]]; then
         local module=$(echo "$target_arg" | sed 's/^--//')
-        local mod_path="$DIR/modules/$module.sh"
+        local mod_file="$DIR/modules/$module.sh"
+        local mod_dir_file="$DIR/modules/$module/module.sh"
+        local mod_path=""
+
+        if [ -f "$mod_file" ]; then
+            mod_path="$mod_file"
+        elif [ -f "$mod_dir_file" ]; then
+            mod_path="$mod_dir_file"
+        fi
         
-        if [ ! -f "$mod_path" ]; then
-            echo "❌ Error: Module '$module' not found at $mod_path"
-            echo "Available modules: $(ls "$DIR/modules" | sed 's/\.sh//g' | xargs)"
+        if [ -z "$mod_path" ]; then
+            echo "❌ Error: Module '$module' not found."
+            echo "Available modules: $(ls -F "$DIR/modules" | sed 's|[/.*]||g' | sed 's/\.sh//g' | xargs)"
             return 1
         fi
 
@@ -388,8 +544,10 @@ setup_modules() {
             install_dependencies "${module_dependencies[@]}"
         fi
         
-        # 2. Run custom setup if exists
-        if declare -f module_setup > /dev/null; then
+        # 2. Run custom setup if exists (Prefer namespaced)
+        if declare -f "${module}_setup" > /dev/null; then
+            "${module}_setup"
+        elif declare -f module_setup > /dev/null; then
             module_setup
         fi
 
@@ -426,9 +584,8 @@ case "$1" in
     stop) stop ;;
     restart) stop; sleep 1; start ;;
     status) status ;;
-    logs) tail -f "$DIR/logs/something.log" ;;
-    setup) shift; setup_modules "$@" ;;
-    vault) manage_vault "$2" ;;
+    module) shift; manage_modules "$@" ;;
+    help|--help|-h) show_help ;;
     create)
         if [ "$2" == "-m" ]; then
             create_module "$3"
@@ -436,5 +593,5 @@ case "$1" in
             echo "Usage: something create -m <module_name>"
         fi
         ;;
-    *) echo "Usage: something {start|stop|restart|status|logs|create|setup|vault}" ;;
+    *) show_help ;;
 esac

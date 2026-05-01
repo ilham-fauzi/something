@@ -22,7 +22,7 @@ module_vars=(
 # Module Dependencies
 module_dependencies=("jq" "curl")
 
-module_setup() {
+pm2_setup() {
     echo "🔍 Checking PM2 installation..."
     if ! command -v pm2 >/dev/null 2>&1; then
         echo "⚠️  PM2 not found. Attempting to install via npm..."
@@ -51,7 +51,7 @@ module_setup() {
     return 0
 }
 
-module_check() {
+pm2_check() {
     # Proactive health check
     local status=$(pm2 jlist | jq -r ".[] | select(.name==\"$APP_NAME\") | .pm2_env.status")
     
@@ -80,7 +80,7 @@ module_check() {
     return 0
 }
 
-module_handle_command() {
+pm2_handle_command() {
     local cmd=$1
     case "$cmd" in
         "/status")

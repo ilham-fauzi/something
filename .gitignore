@@ -8,3 +8,4 @@ logs/
 scratch/
 .code-review-graph/
 .DS_Store
+modules/*/

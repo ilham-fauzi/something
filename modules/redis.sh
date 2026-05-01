@@ -22,7 +22,7 @@ module_vars=(
 # Module Dependencies
 module_dependencies=("redis-tools")
 
-module_setup() {
+redis_setup() {
     echo "🔍 Checking Redis tools..."
     if ! command -v redis-cli >/dev/null 2>&1; then
         echo "⚠️  redis-cli not found. It will be installed via dependencies."
@@ -32,7 +32,7 @@ module_setup() {
     return 0
 }
 
-module_check() {
+redis_check() {
     # Health check logic
     local auth_cmd=""
     [ -n "$REDIS_PASS" ] && auth_cmd="-a $REDIS_PASS"
@@ -47,7 +47,7 @@ module_check() {
     return 0
 }
 
-module_handle_command() {
+redis_handle_command() {
     local cmd=$1
     local auth_cmd=""
     [ -n "$REDIS_PASS" ] && auth_cmd="-a $REDIS_PASS"

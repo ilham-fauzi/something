@@ -33,10 +33,26 @@ load_modules() {
     IFS=',' read -ra ADDR <<< "$modules_to_load"
     for module in "${ADDR[@]}"; do
         module=$(echo "$module" | xargs) # Trim whitespace
-        local mod_path="$DIR/modules/$module.sh"
-        if [ -f "$mod_path" ]; then
+        [ -z "$module" ] && continue
+        
+        local mod_file="$DIR/modules/$module.sh"
+        local mod_dir_file="$DIR/modules/$module/module.sh"
+        local mod_path=""
+
+        if [ -f "$mod_file" ]; then
+            mod_path="$mod_file"
+        elif [ -f "$mod_dir_file" ]; then
+            mod_path="$mod_dir_file"
+        fi
+
+        if [ -n "$mod_path" ]; then
+            # Collision Detection: Check if namespaced functions already exist
+            if declare -f "${module}_check" > /dev/null; then
+                log_warn "Collision Warning: Module functions for '$module' already defined. Overwriting..."
+            fi
+            
             source "$mod_path"
-            log_info "Module loaded: $module"
+            log_info "Module loaded: $module (via $mod_path)"
         else
             log_warn "Module not found: $module"
         fi
@@ -88,17 +104,20 @@ handle_module_commands() {
     local cmd=$1
     local chat_id=$2
     
-    # Iterate through loaded modules
     IFS=',' read -ra ADDR <<< "$ENABLED_MODULES"
     for module in "${ADDR[@]}"; do
-        # Each module defines module_commands array
-        # We need to check if cmd is in that array
-        # Note: Since we source them, we need a way to distinguish them.
-        # For simplicity in this bash version, we'll just check the handler.
-        # In a more advanced version, we'd use namespaces.
+        module=$(echo "$module" | xargs)
+        [ -z "$module" ] && continue
         
-        # We'll just call the module's handler and let it decide
-        local response=$(module_handle_command "$cmd")
+        # Prefer namespaced handler: [module]_handle_command
+        # Fallback to legacy: module_handle_command (not recommended for multiple modules)
+        local response=""
+        if declare -f "${module}_handle_command" > /dev/null; then
+            response=$("${module}_handle_command" "$cmd")
+        elif declare -f "module_handle_command" > /dev/null; then
+            response=$(module_handle_command "$cmd")
+        fi
+
         if [ -n "$response" ]; then
             send_message "$response" "HTML" "$chat_id"
             return 0
@@ -111,8 +130,16 @@ run_health_checks() {
     log_info "Running health checks..."
     IFS=',' read -ra ADDR <<< "$ENABLED_MODULES"
     for module in "${ADDR[@]}"; do
-        local alert=$(module_check)
-        if [ $? -ne 0 ]; then
+        [ -z "$module" ] && continue
+        
+        local alert=""
+        if declare -f "${module}_check" > /dev/null; then
+            alert=$("${module}_check")
+        elif declare -f "module_check" > /dev/null; then
+            alert=$(module_check)
+        fi
+
+        if [ $? -ne 0 ] && [ -n "$alert" ]; then
             log_warn "Health check failed in $module: $alert"
             send_message "⚠️ <b>Alert from $module</b>: $alert"
         fi
